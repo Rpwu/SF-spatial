@@ -1,0 +1,224 @@
+---
+title: "stat836-project-hypothesis-test"
+output: pdf_document
+date: "`r Sys.Date()`"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(sf)
+library(spatstat)
+library(ggplot2)
+library(raster)
+library(dplyr)
+library(cubature)
+```
+
+```{r}
+cases_with_distances <- st_read("data/cases_with_distances.geojson")
+study_region <- st_read("data/study_region.geojson")
+shelters <- st_read("data/shelters.geojson")
+```
+
+```{r}
+study_region_projected <- st_transform(study_region, crs = 32610)
+cases_projected <- st_transform(cases_with_distances, crs = 32610)
+shelters_projected <- st_transform(shelters, crs = 32610)
+```
+
+```{r}
+W <- as.owin(study_region_projected$geometry)
+```
+
+```{r}
+ggplot() +
+  geom_sf(data = study_region_projected, fill = 'lightblue', color = 'black', size = 0.5, alpha = 0.5) +
+  geom_sf(data = cases_projected, color = 'purple', size = 2) +
+  geom_sf(data = shelters_projected, color = 'red', size = 4) +
+  labs(title = "Projected Study Region with Cases",
+       subtitle = "Red points represent shelters, purple points represent cases",
+       x = "Longitude", y = "Latitude") +
+  theme_minimal() +
+  theme(axis.title = element_text(size = 12),
+        plot.title = element_text(size = 14, face = "bold"),
+        plot.subtitle = element_text(size = 12))
+```
+
+```{r}
+distances <- st_distance(cases_projected, shelters_projected)
+min_distances <- apply(distances, 1, min)
+
+cases_projected$DistanceToShelter = min_distances
+```
+
+```{r}
+ggplot() +
+  geom_sf(data = study_region_projected, fill = "lightblue", color = "black", size = 0.2) +
+  geom_sf(data = cases_projected, aes(color = DistanceToShelter), size = 2) +
+  geom_sf(data = shelters_projected, color = "red", shape = 20, size = 4) +
+  scale_color_viridis_c(option = "plasma", guide = "colourbar", name = "Distance to Nearest Shelter (m)") +
+  labs(title = "Map of Homelessness Cases and Shelters",
+       subtitle = "Cases colored by distance to the nearest shelter",
+       x = "Longitude", y = "Latitude") +
+  theme_minimal()
+```
+
+```{r}
+cases_projected$distance_cat <- cut(cases_projected$DistanceToShelter, breaks=quantile(cases_projected$DistanceToShelter, probs=seq(0, 1, by=0.1)), include.lowest=TRUE, labels=FALSE)
+
+coords <- st_coordinates(cases_projected)
+cases_ppp <- ppp(coords[, "X"], coords[, "Y"], window = W)
+marks(cases_ppp) <- factor(cases_projected$distance_cat)
+
+model <- ppm(cases_ppp, ~ marks)
+
+summary(model)
+```
+
+```{r}
+confint(model)
+```
+
+```{r}
+sigma <- bw.diggle(cases_ppp)
+
+density_estimate <- density(cases_ppp, sigma = 50)
+```
+
+```{r}
+density_raster <- raster(density_estimate)
+df <- as.data.frame(rasterToPoints(density_raster))
+colnames(df) <- c("x", "y", "intensity")
+cases_df <- data.frame(x = coords[, "X"], y = coords[, "Y"])
+```
+
+```{r}
+# overlay shelter points
+coords_shelter <- st_coordinates(shelters_projected)
+shelter_df <- data.frame(x = coords_shelter[, "X"], y = coords_shelter[, "Y"])
+```
+
+
+```{r}
+ggplot() +
+  geom_tile(data = df, aes(x = x, y = y, fill = intensity)) +  
+  geom_point(data = shelter_df, aes(x = x, y = y), color = "red", size = 3) + 
+  scale_fill_viridis_c() +
+  theme_minimal() +  
+  labs(fill = "Intensity") +
+  labs(title = "Intensity Plot",
+       subtitle = "Red points represent shelters",
+       x = "Longitude", y = "Latitude") +
+  coord_fixed()
+```
+
+```{r}
+bounds <- st_bbox(study_region_projected)
+bounds
+```
+
+```{r}
+n <- nrow(cases_df)
+dists <- as.data.frame(min_distances)
+s1 <- c(552176.6, 4181576)
+s2 <- c(552087.9, 4181425)
+s3 <- c(551821.3, 4181152)
+s4 <- c(552029.7, 4181720)
+
+llik <- function(theta) {
+  alpha <- theta[1]
+  beta <- theta[2]
+  f_int <- function(x) {
+    d1 <- sqrt((x[1] - s1[1])^2 + (x[2] - s1[2])^2)
+    d2 <- sqrt((x[1] - s2[1])^2 + (x[2] - s2[2])^2)
+    d3 <- sqrt((x[1] - s3[1])^2 + (x[2] - s3[2])^2)
+    d4 <- sqrt((x[1] - s4[1])^2 + (x[2] - s4[2])^2)
+    d_min <- min(d1, d2, d3, d4)
+    (1 + alpha * exp(-beta * d_min))
+  }
+  int_v <- adaptIntegrate(f_int, c(551253.5,4180761), c(552689.7,4182178))$integral
+  -sum(log((1 + alpha * exp(-beta * dists)))) + n*log(int_v)
+}
+
+
+optim(c(1,1), llik)
+  
+  
+
+```
+
+```{r}
+f_int_est <- function(x) {
+    d1 <- sqrt((x[1] - s1[1])^2 + (x[2] - s1[2])^2)
+    d2 <- sqrt((x[1] - s2[1])^2 + (x[2] - s2[2])^2)
+    d3 <- sqrt((x[1] - s3[1])^2 + (x[2] - s3[2])^2)
+    d4 <- sqrt((x[1] - s4[1])^2 + (x[2] - s4[2])^2)
+    d_min <- min(d1, d2, d3, d4)
+(1 + 1.1 * exp(-d_min))
+}
+rho_est <- n / adaptIntegrate(f_int_est, c(551253.5,4180761), c(552689.7,4182178))$integral
+```
+
+```{r}
+rho_est
+```
+
+
+```{r}
+study_region_polygon <- study_region_projected
+bounds <- st_bbox(study_region_polygon)
+n <- nrow(cases_df)
+
+llik <- function(theta) {
+  alpha <- theta[1]
+  beta <- theta[2]
+  
+  f_int <- function(x) {
+    point <- st_point(x)
+    
+    if (!st_contains(study_region_polygon, point, sparse = FALSE)) {
+      return(0)
+    }
+    
+    d1 <- sqrt((x[1] - s1[1])^2 + (x[2] - s1[2])^2)
+    d2 <- sqrt((x[1] - s2[1])^2 + (x[2] - s2[2])^2)
+    d3 <- sqrt((x[1] - s3[1])^2 + (x[2] - s3[2])^2)
+    d4 <- sqrt((x[1] - s4[1])^2 + (x[2] - s4[2])^2)
+    d_min <- min(d1, d2, d3, d4)
+    (1 + alpha * exp(-beta * d_min))
+  }
+  
+  int_v <- adaptIntegrate(f_int, lower = c(bounds['xmin'], bounds['ymin']), 
+                          upper = c(bounds['xmax'], bounds['ymax']))$integral
+  
+  -sum(log((1 + alpha * exp(-beta * dists)))) + n * log(int_v)
+}
+
+theta_init <- c(1, 1)
+
+optim_results <- optim(theta_init, llik)
+```
+
+```{r}
+f_int_est <- function(x) {
+  point <- st_point(x)
+    
+    if (!st_contains(study_region_polygon, point, sparse = FALSE)) {
+      return(0)
+    }
+  
+    d1 <- sqrt((x[1] - s1[1])^2 + (x[2] - s1[2])^2)
+    d2 <- sqrt((x[1] - s2[1])^2 + (x[2] - s2[2])^2)
+    d3 <- sqrt((x[1] - s3[1])^2 + (x[2] - s3[2])^2)
+    d4 <- sqrt((x[1] - s4[1])^2 + (x[2] - s4[2])^2)
+    d_min <- min(d1, d2, d3, d4)
+(1 + 1.1 * exp(-d_min))
+}
+rho_est <- n / adaptIntegrate(f_int_est, lower = c(bounds['xmin'], bounds['ymin']), 
+                          upper = c(bounds['xmax'], bounds['ymax']))$integral
+```
+
+

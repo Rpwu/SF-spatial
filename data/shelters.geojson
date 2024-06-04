@@ -1,0 +1,9 @@
+{
+"type": "FeatureCollection",
+"features": [
+{ "type": "Feature", "properties": { "shelter_id": 0 }, "geometry": { "type": "Point", "coordinates": [ -122.407483, 37.780046 ] } },
+{ "type": "Feature", "properties": { "shelter_id": 1 }, "geometry": { "type": "Point", "coordinates": [ -122.408502, 37.778684 ] } },
+{ "type": "Feature", "properties": { "shelter_id": 2 }, "geometry": { "type": "Point", "coordinates": [ -122.411548, 37.776242 ] } },
+{ "type": "Feature", "properties": { "shelter_id": 3 }, "geometry": { "type": "Point", "coordinates": [ -122.409141, 37.781345 ] } }
+]
+}
